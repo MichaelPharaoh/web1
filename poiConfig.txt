@@ -1,0 +1,2 @@
+Michael, SUM(B#:C#)
+Youness, SUM(G#:H#)
