@@ -24,6 +24,10 @@ class SparkTest {
   df.write.excel("c:/data/output.xlsx")
 
 }
+
+val todfy= spark.udf.register("square",(x:Int)=>x*2)
+val todfsum= spark.udf.register("square",(x:Int,y:Int)=>x+y)
+  
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
