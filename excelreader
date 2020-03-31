@@ -1,0 +1,127 @@
+import org.apache.commons.io.FileUtils;
+import org.apache.poi.openxml4j.exceptions.InvalidFormatException;
+import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.xssf.usermodel.XSSFFormulaEvaluator;
+import org.apache.poi.xssf.usermodel.XSSFSheet;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+public class ApachePoiDemo {
+    public static void main(String[] args) {
+        try {
+            writeFileUsingPOI();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static void writeFileUsingPOI() throws IOException, InvalidFormatException {
+        File tempFile = copySourceXslsToTempFile("samplePoi.xlsx");
+
+        // Load the workbook
+        final XSSFWorkbook workbook = new XSSFWorkbook(tempFile);
+
+        // load the first sheet
+        final XSSFSheet sheet = workbook.getSheetAt(0);
+
+        Map<String, String> configurations = loadConfigurations("poiConfig.txt");
+
+        configurations.forEach((title, rule) -> insertNewColumn(workbook, sheet, title, rule));
+        saveWorkbookToNewFile(workbook);
+    }
+
+    private static Map<String, String> loadConfigurations(String configFileName) {
+        Map<String, String> confs = new HashMap<>();
+        try {
+            List<String> allLines = Files.readAllLines(Paths.get(configFileName));
+            for (String line : allLines) {
+                confs.put(line.split(",")[0], line.split(",")[1]);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return confs;
+    }
+
+    private static void saveWorkbookToNewFile(XSSFWorkbook workbook) throws IOException {
+        try {
+            //Write the workbook to the file system
+            String newFileName = UUID.randomUUID() + "_samplePoi.xlsx";
+            FileOutputStream out = new FileOutputStream(newFileName);
+            workbook.write(out);
+            out.close();
+            System.out.println(newFileName + " has been created successfully");
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            workbook.close();
+        }
+    }
+
+    private static File copySourceXslsToTempFile(String sourceFilePath) throws IOException {
+        File dest = File.createTempFile("samplePoiTemp", "xls");
+        FileUtils.copyFile(new File(sourceFilePath), dest);
+        return dest;
+    }
+
+    public static void insertNewColumn(XSSFWorkbook workbook, Sheet sheet, String title, String rule) {
+        FormulaEvaluator evaluator = workbook.getCreationHelper()
+                .createFormulaEvaluator();
+        evaluator.clearAllCachedResultValues();
+
+        int nrRows = getNumberOfRows(sheet);
+        int nrCols = getNrColumns(sheet);
+        System.out.println("Inserting new column " + title);
+
+        for (int row = 0; row < nrRows; row++) {
+            Row r = sheet.getRow(row);
+
+            if (r == null) {
+                continue;
+            }
+
+            Cell newCell;
+            if (row == 0) {
+                newCell = r.createCell(nrCols, CellType.STRING);
+                newCell.setCellValue(title);
+            } else {
+                newCell = r.createCell(nrCols, CellType.FORMULA);
+                newCell.setCellFormula(rule.replace("#", String.valueOf(row + 1)));
+                evaluator.notifySetFormula(newCell);
+                //CellValue cellValue = evaluator.evaluate(newCell);
+                evaluator.evaluateFormulaCell(newCell);
+            }
+        }
+
+        // Adjust the column widths
+        for (int col = nrCols; col > nrCols + 1; col--) {
+            sheet.setColumnWidth(col, sheet.getColumnWidth(col - 1));
+        }
+
+        XSSFFormulaEvaluator.evaluateAllFormulaCells(workbook);
+    }
+
+    private static int getNrColumns(Sheet sheet) {
+        // get header row
+        Row headerRow = sheet.getRow(0);
+        int nrCol = headerRow.getLastCellNum();
+        System.out.println("Found " + nrCol + " columns.");
+        return nrCol;
+    }
+
+    private static int getNumberOfRows(Sheet sheet) {
+        int rowNum = sheet.getLastRowNum() + 1;
+        System.out.println("Found " + rowNum + " rows.");
+        return rowNum;
+    }
+
+}
