@@ -1,0 +1,231 @@
+!apt-get install openjdk-8-jdk-headless -qq > /dev/null
+!wget -q https://dlcdn.apache.org/spark/spark-3.1.2/spark-3.1.2-bin-hadoop3.2.tgz
+!tar xf spark-3.1.2-bin-hadoop3.2.tgz
+import os
+os.environ["JAVA_HOME"] = "/usr/lib/jvm/java-8-openjdk-amd64"
+os.environ["SPARK_HOME"] = "/content/spark-3.1.2-bin-hadoop3.2"
+!pip install -q findspark
+import findspark
+findspark.init()
+from array import array
+from pyspark.sql.functions import col,lit, udf
+from pyspark.sql.types import StringType
+from pyspark.sql import SparkSession
+spark = SparkSession.builder\
+        .master("local")\
+        .appName("Colab")\
+        .config('spark.ui.port', '4050')\
+        .getOrCreate()
+spark.catalog.listTables()
+
+
+filePath = "/content/excel2021.xlsx"
+
+
+# utils for spark data engineering
+from pyspark.sql.types import *
+from pyspark.sql import *
+from pyspark.sql.functions import *
+import pyspark.sql.functions as F
+from pyspark.sql.window import *
+# Auxiliar functions
+def equivalent_type(f):
+    if f == 'datetime64[ns]': return TimestampType()
+    elif f == 'int64': return LongType()
+    elif f == 'int32': return IntegerType()
+    elif f == 'float64': return FloatType()
+    else: return StringType()
+
+def define_structure(string, format_type):
+    try: typo = equivalent_type(format_type)
+    except: typo = StringType()
+    return StructField(string, typo)
+
+# Given pandas dataframe, it will return a spark's dataframe.
+def pandas_to_spark(pandas_df):
+    columns = list(pandas_df.columns)
+    types = list(pandas_df.dtypes)
+    struct_list = []
+    for column, typo in zip(columns, types): 
+      struct_list.append(define_structure(column, typo))
+    p_schema = StructType(struct_list)
+    return spark.createDataFrame(pandas_df, p_schema)
+
+
+    import pandas as pd
+
+
+df1 = pd.read_excel(filePath, sheet_name='Sheet1')
+df1 = df1[:-1]
+col_list = list(df1.columns)
+col_list.remove("business ")
+col_list.insert(0,"business")
+df1.columns = col_list
+df1 = df1[df1.columns[~df1.columns.str.endswith('_des')]]
+df1 =df1.drop(columns = ["dtl_desc"],axis=1)
+
+
+sparkDF = pandas_to_spark(df1)
+for column, data_type in sparkDF.dtypes:
+  if data_type == "float":
+    # converting float to int
+    sparkDF=sparkDF.withColumn(column, col(column).cast(IntegerType()))
+
+sparkDF.show()
+
+sparkDF.printSchema()
+sparkDFHardCoded = sparkDF.select("business", "fiscal_yar","accounting","tree_name","dtl_id")
+processing_cols = ['l25_id','l24_id','l23_id','l22_id','l21_id','l20_id','l19_id','l18_id','l17_id','l16_id','l15_id','l14_id','l13_id','l12_id','l11_id','l10_id','l9_id','l8_id','l7_id','l6_id','l5_id','l4_id','l3_id','l2_id','l1_id']
+sparkDFProcessing = sparkDF.select(processing_cols)
+
+
+sparkDFHardCoded.show()
+
+
+sparkDFProcessing.show()
+
+
+
+columns = processing_cols
+demo = sparkDFProcessing.withColumn("type",reverse(array(*columns))).drop(*columns)
+
+
+demo.show(3, False)
+
+
+sparkDFHardCoded.show()
+
+
+def joinColumns(df1, df2):
+  df1 = df1.withColumn("id", monotonically_increasing_id())
+  df2 = df2.withColumn("id", monotonically_increasing_id())
+  df3 = df1.join(df2, "id", "inner").drop("id")
+  return df3
+
+
+
+demo2 = joinColumns(sparkDFHardCoded, demo)
+
+demo2.show()
+
+
+demo2.printSchema()
+
+def level_generator():
+  return [i for i in range(1,len(processing_cols)+1)]
+level_generator_udf =udf(  level_generator, ArrayType(IntegerType()))
+
+def dtl_id_level_generator(a):
+  counter = 1
+  for x in a:
+    try:
+      int(x)
+    except:
+      break
+    else:
+      counter = counter+1
+      print(counter)
+  if counter > len(a):
+    counter = len(a)
+  for i in range(1,counter+1):
+    if(i-1 < len(a)):
+      a[i-1] = counter
+  for i in range(counter+1,len(a)+1):
+    counter = counter+1
+    a[i-1] = counter
+  return a
+
+dtl_id_level_generator_udf =udf(  dtl_id_level_generator, ArrayType(StringType()))
+demo2 = demo2.withColumn("level", level_generator_udf() )
+demo2 = demo2.withColumn("dtl_id_level", dtl_id_level_generator_udf(col("type")) )
+demo2.show(3, False)
+
+
+demo2.printSchema()
+
+demo2.show()
+
+#adding id column to demo2
+# adding a column from a list
+''' 
+list_data = [i for i in range(1,76)]
+demo2.select(collect_list(struct(F.col("*"))).alias("data"))\
+.withColumn("list",F.array([F.lit(i) for i in list_data]))\
+.select(F.explode(F.arrays_zip(F.col("data"),F.col("list"))).alias("full_data"))\
+.select(F.col("full_data.data.*"),F.col("full_data.list").alias("id")).show()
+'''
+def addColumnFromList(df, list_data, column_name="id"):
+  return df.select(collect_list(struct(F.col("*"))).alias("data"))\
+  .withColumn("list",F.array([F.lit(i) for i in list_data]))\
+  .select(F.explode(F.arrays_zip(F.col("data"),F.col("list"))).alias("full_data"))\
+  .select(F.col("full_data.data.*"),F.col("full_data.list").alias(column_name))
+
+
+  def joinColumnsWithId(df1, df2):
+  df2 = df2.withColumnRenamed("id","temp_id")
+  df3 = df1.join(df2, df1.id == df2.temp_id, "inner")
+  df2 = df2.withColumnRenamed("temp_id","id")
+  return df3
+
+
+n = len(processing_cols)*demo2.count()+1
+list_data = [i for i in range(1,n)]
+
+print(n)
+
+finalDF = demo2.select(demo2.business, demo2.fiscal_yar, demo2.accounting, demo2.tree_name,demo2.dtl_id, posexplode(demo2.type), ).drop("pos")
+finalDF = finalDF.withColumnRenamed("col","level_id")
+finalDF = addColumnFromList(finalDF, list_data,"id")
+levelIdDF = finalDF.select("level_id","id")
+
+finalDF = demo2.select(demo2.business, demo2.fiscal_yar, demo2.accounting, demo2.tree_name,demo2.dtl_id, posexplode(demo2.level), ).drop("pos")
+finalDF = finalDF.withColumnRenamed("col","level")
+finalDF = addColumnFromList(finalDF, list_data,"id")
+levelDF = finalDF.select("level","id")
+
+
+
+finalDF = demo2.select( demo2.business, demo2.fiscal_yar, demo2.accounting, demo2.tree_name,demo2.dtl_id, posexplode(demo2.type), ).drop("pos")
+finalDF = finalDF.withColumnRenamed("col","level_id")
+finalDF = addColumnFromList(finalDF, list_data,"id")
+levelIdDF=finalDF.select("level_id", "id")
+
+finalDF = demo2.select( demo2.business, demo2.fiscal_yar, demo2.accounting, demo2.tree_name,demo2.dtl_id, posexplode(demo2.dtl_id_level), ).drop("pos")
+finalDF = finalDF.withColumnRenamed("col","dtl_id_level")
+finalDF = addColumnFromList(finalDF, list_data,"id")
+dtlIdlevelDF = finalDF
+
+finalDF=joinColumnsWithId( dtlIdlevelDF, levelIdDF)
+finalDF=joinColumnsWithId( finalDF, levelDF)
+finalDF = finalDF.sort("id")
+finalDF.show(75, False)
+
+
+finalDF.count()
+
+
+finalDF.printSchema()
+
+
+finalDF = finalDF.withColumn("dtl_id_level", finalDF["dtl_id_level"].cast(IntegerType()))
+finalDF = finalDF.withColumn("level", finalDF["level"].cast(IntegerType()))
+finalDF.printSchema()
+
+
+
+def maxi(a,b):
+  if a>b:
+    return a
+  else:
+    return 25
+
+maxUDF = udf(lambda a,b: maxi(a,b), IntegerType())
+ansDF = finalDF.select(col("*"),maxUDF(col("dtl_id_level"),col("level")).alias("max_dtl_level") ) 
+
+
+ansDF.show(75,False)
+
+ansDF.count()
+
+
+ansDF.filter(ansDF.dtl_id == "US").show()
